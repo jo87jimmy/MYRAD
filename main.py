@@ -16,6 +16,10 @@ from loss import FocalLoss, SSIM
 from data_loader import MVTecDRAEMTrainDataset
 from torch import optim
 from data_loader_val import MVTecDRAEMValidationDataset
+# 新增熱力圖可視化所需的函式庫
+from PIL import Image
+import matplotlib.pyplot as plt
+import torchvision.transforms as transforms
 
 
 def setup_seed(seed):
@@ -287,6 +291,63 @@ def train(_arch_, _class_, epochs, save_pth_path):
     print("訓練完成！")
 
 
+def generate_anomaly_heatmap(image_path,
+                             student_model,
+                             student_model_seg,
+                             device,
+                             resize_shape=[256, 256]):
+    """
+    使用訓練好的學生模型為給定輸入影像生成異常熱力圖。
+
+    Args:
+        image_path (str): 輸入影像的路徑。
+        student_model (torch.nn.Module): 訓練好的學生重建子網路。
+        student_model_seg (torch.nn.Module): 訓練好的學生判別子網路。
+        device (str or torch.device): 執行推論的裝置 ('cuda' 或 'cpu')。
+        resize_shape (list): 影像縮放的目標尺寸 (高度, 寬度)。
+
+    Returns:
+        tuple: (numpy.ndarray, PIL.Image.Image) 異常熱力圖 (NumPy 陣列) 和原始影像 (已縮放的 PIL.Image 物件)。
+    """
+    student_model.eval()  # 設定模型為評估模式
+    student_model_seg.eval()
+
+    # 定義影像預處理轉換
+    # 與 MVTecDRAEMTrainDataset 中的正規化保持一致 (通常是 [0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    transform = transforms.Compose([
+        transforms.Resize(resize_shape),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    ])
+
+    # 載入並預處理影像
+    img = Image.open(image_path).convert('RGB')
+    # 為了可視化，保留一個未正規化但已縮放的原始影像副本
+    original_img_resized = img.resize((resize_shape[1], resize_shape[0]))
+    img_tensor = transform(img).unsqueeze(0).to(device)  # 新增批次維度
+
+    with torch.no_grad():  # 在推論時不計算梯度
+        # 學生重建網路推論
+        student_rec = student_model(img_tensor)
+
+        # 準備學生判別網路的輸入 (重建影像 + 原始影像)
+        student_joined_in = torch.cat((student_rec, img_tensor), dim=1)
+
+        # 學生判別網路推論
+        student_out_mask_logits = student_model_seg(student_joined_in)
+
+        # 應用 Softmax 取得異常機率
+        # 判別網路輸出有 2 個通道：[正常機率 logits, 異常機率 logits]
+        # 我們取異常類別 (通道 1) 的機率
+        anomaly_map = F.softmax(student_out_mask_logits,
+                                dim=1)[:, 1, :, :].squeeze(0)
+
+        # 移至 CPU 並轉換為 NumPy 陣列以便可視化
+        anomaly_map_np = anomaly_map.cpu().numpy()
+
+    return anomaly_map_np, original_img_resized
+
+
 if __name__ == '__main__':
     import argparse
     import pandas as pd
@@ -300,6 +361,15 @@ if __name__ == '__main__':
     parser.add_argument('--arch', default='wres50', type=str)  # 模型架構
     parser.add_argument('--bs', action='store', type=int, required=True)
     parser.add_argument('--lr', action='store', type=float, required=True)
+    parser.add_argument('--test_image_path',
+                        type=str,
+                        help='路徑到一個用於生成熱力圖的測試影像 (訓練後執行)。',
+                        default=None)  # 新增參數
+    parser.add_argument(
+        '--student_dropout_rate',
+        type=float,
+        default=0.2,
+        help='學生模型訓練和載入時使用的 Dropout Rate。')  # 將 Dropout Rate 可配置化
     args = parser.parse_args()
 
     setup_seed(111)  # 固定隨機種子
@@ -311,3 +381,73 @@ if __name__ == '__main__':
 
     # 開始訓練，並接收最佳模型路徑與結果
     train(args.arch, args.category, args.epochs, save_pth_path)
+
+    # --- 缺陷檢測熱力圖生成區塊 ---
+    if args.test_image_path:
+        print("\n--- 正在生成缺陷檢測熱力圖 ---")
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        # 載入學生模型權重
+        # 這裡使用的 dropout_rate 應與訓練時使用的保持一致
+        student_model = StudentReconstructiveSubNetwork(
+            in_channels=3,
+            out_channels=3,
+            dropout_rate=args.student_dropout_rate).to(device)
+        student_model_seg = StudentDiscriminativeSubNetwork(
+            in_channels=6,
+            out_channels=2,
+            dropout_rate=args.student_dropout_rate).to(device)
+
+        student_run_name = f"{args.arch}_student_{args.category}"
+        student_model_path = os.path.join(save_pth_path,
+                                          student_run_name + ".pckl")
+        student_model_seg_path = os.path.join(save_pth_path,
+                                              student_run_name + "_seg.pckl")
+
+        if os.path.exists(student_model_path) and os.path.exists(
+                student_model_seg_path):
+            student_model.load_state_dict(
+                torch.load(student_model_path, map_location=device))
+            student_model_seg.load_state_dict(
+                torch.load(student_model_seg_path, map_location=device))
+            print(
+                f"✅ 已成功載入學生模型權重: {student_model_path} 及 {student_model_seg_path}"
+            )
+
+            # 生成熱力圖
+            anomaly_heatmap, original_image_resized = generate_anomaly_heatmap(
+                args.test_image_path, student_model, student_model_seg, device)
+
+            # 可視化結果
+            plt.figure(figsize=(12, 6))
+
+            plt.subplot(1, 2, 1)
+            plt.imshow(original_image_resized)
+            plt.title("原始影像 (Resized)")
+            plt.axis('off')
+
+            plt.subplot(1, 2, 2)
+            # 將熱力圖疊加在原始影像上
+            plt.imshow(original_image_resized, cmap='gray')  # 背景顯示原始影像
+            plt.imshow(anomaly_heatmap, cmap='jet', alpha=0.5, vmin=0,
+                       vmax=1)  # 疊加熱力圖
+            plt.colorbar(label='異常機率')
+            plt.title("缺陷熱力圖")
+            plt.axis('off')
+
+            plt.tight_layout()
+            plt.show()
+
+            # (可選) 儲存熱力圖到檔案
+            heatmap_filename = os.path.join(
+                save_pth_path,
+                f"heatmap_{os.path.basename(args.test_image_path)}")
+            plt.savefig(heatmap_filename)
+            print(f"熱力圖已儲存至: {heatmap_filename}")
+
+        else:
+            print(
+                f"❌ 找不到學生模型權重，請確認路徑: {student_model_path} 或 {student_model_seg_path} 是否存在。"
+            )
+    else:
+        print("\n如需生成熱力圖，請在命令列中指定 '--test_image_path <影像路徑>'。")
