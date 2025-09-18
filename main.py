@@ -210,7 +210,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
             loss.backward()
             optimizer.step()
             # === 可視化 ===
-            if n_iter % 200 == 0:
+            if i_batch % 100 == 0:
                 visualizer.plot_loss(loss_hard_l2.item(),
                                      n_iter,
                                      loss_name='l2_loss')
@@ -220,7 +220,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 visualizer.plot_loss(loss_hard_segment.item(),
                                      n_iter,
                                      loss_name='segment_loss')
-            if n_iter % 400 == 0:
+            if i_batch == 0:
                 t_mask = student_out_mask_sm[:, 1:, :, :]
                 visualizer.visualize_image_batch(aug_gray_batch,
                                                  n_iter,
