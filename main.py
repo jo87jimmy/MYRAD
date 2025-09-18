@@ -341,6 +341,14 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 val_loss = (1 -
                             alpha) * loss_hard_val + alpha * loss_distill_val
                 val_running_loss += val_loss.item()
+                if i_batch_val == 0:
+                    anomaly_map_val = generate_anomaly_map(
+                        student_rec_val,
+                        gray_batch_val,
+                        student_out_mask_sm_val,
+                        mode='recon+seg')
+                    visualizer.visualize_image_batch(
+                        anomaly_map_val, n_iter, image_name='val_anomaly_map')
 
         epoch_val_loss = val_running_loss / len(val_dataloader)
         print(f"Epoch {epoch+1} Average Validation Loss: {epoch_val_loss:.4f}")
