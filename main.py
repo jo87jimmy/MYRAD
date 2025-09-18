@@ -150,9 +150,9 @@ def train(_arch_, _class_, epochs, save_pth_path):
         shuffle=False,  # 驗證集通常不需要打亂
         num_workers=8)  # 保持與訓練集相同的 num_workers 或根據需求調整
     print("Validation DataLoader prepared.")
-
+    visualizer_path = f'{_class_}/'
     visualizer = TensorboardVisualizer(
-        log_dir=os.path.join(save_pth_path, {_class_} + "/"))
+        log_dir=os.path.join(save_pth_path, visualizer_path))
 
     # === Step 6: 實現核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
