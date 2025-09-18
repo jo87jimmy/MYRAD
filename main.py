@@ -20,6 +20,7 @@ from data_loader_val import MVTecDRAEMValidationDataset
 from PIL import Image
 import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
+from tensorboard_visualizer import TensorboardVisualizer
 
 
 def setup_seed(seed):
@@ -73,7 +74,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
     teacher_model_seg = teacher_model_seg.to(device)
     teacher_model.eval()
     teacher_model_seg.eval()
-
     # 學生模型
     # 定義一個 dropout_rate，您可以將其作為 args 的一部分，或在這裡硬編碼
     student_dropout_rate = 0.2  # 建議從 0.1-0.3 之間開始嘗試
@@ -140,7 +140,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
                             batch_size=args.bs,
                             shuffle=True,
                             num_workers=8)
-
     # --- 添加驗證資料載入器 ---
     val_path = f'./mvtec/{_class_}/test'  # 驗證資料路徑 (MVTec AD 的測試集)
     val_dataset = MVTecDRAEMValidationDataset(val_path,
@@ -151,6 +150,9 @@ def train(_arch_, _class_, epochs, save_pth_path):
         shuffle=False,  # 驗證集通常不需要打亂
         num_workers=8)  # 保持與訓練集相同的 num_workers 或根據需求調整
     print("Validation DataLoader prepared.")
+
+    visualizer = TensorboardVisualizer(
+        log_dir=os.path.join(save_pth_path, {_class_} + "/"))
 
     # === Step 6: 實現核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
@@ -207,10 +209,37 @@ def train(_arch_, _class_, epochs, save_pth_path):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            # === 可視化 ===
+            if args.visualize and n_iter % 200 == 0:
+                visualizer.plot_loss(loss_hard_l2.item(),
+                                     n_iter,
+                                     loss_name='l2_loss')
+                visualizer.plot_loss(loss_hard_ssim.item(),
+                                     n_iter,
+                                     loss_name='ssim_loss')
+                visualizer.plot_loss(loss_hard_segment.item(),
+                                     n_iter,
+                                     loss_name='segment_loss')
+            if args.visualize and n_iter % 400 == 0:
+                t_mask = student_out_mask_sm[:, 1:, :, :]
+                visualizer.visualize_image_batch(aug_gray_batch,
+                                                 n_iter,
+                                                 image_name='batch_augmented')
+                visualizer.visualize_image_batch(
+                    gray_batch, n_iter, image_name='batch_recon_target')
+                visualizer.visualize_image_batch(student_rec,
+                                                 n_iter,
+                                                 image_name='batch_recon_out')
+                visualizer.visualize_image_batch(anomaly_mask,
+                                                 n_iter,
+                                                 image_name='mask_target')
+                visualizer.visualize_image_batch(t_mask,
+                                                 n_iter,
+                                                 image_name='mask_out')
 
-            # === 修改：累計當前 batch 的損失 ===
+            # === 累計當前 batch 的損失 ===
             running_loss += loss.item()
-
+            n_iter += 1  # 更新迭代計數器
             if i_batch % 100 == 0:
                 print(
                     f"  Batch {i_batch}/{len(dataloader)}, Total Loss: {loss.item():.4f}, "
@@ -361,15 +390,15 @@ if __name__ == '__main__':
     parser.add_argument('--arch', default='wres50', type=str)  # 模型架構
     parser.add_argument('--bs', action='store', type=int, required=True)
     parser.add_argument('--lr', action='store', type=float, required=True)
-    parser.add_argument('--test_image_path',
-                        type=str,
-                        help='路徑到一個用於生成熱力圖的測試影像 (訓練後執行)。',
-                        default=None)  # 新增參數
-    parser.add_argument(
-        '--student_dropout_rate',
-        type=float,
-        default=0.2,
-        help='學生模型訓練和載入時使用的 Dropout Rate。')  # 將 Dropout Rate 可配置化
+    # parser.add_argument('--test_image_path',
+    #                     type=str,
+    #                     help='路徑到一個用於生成熱力圖的測試影像 (訓練後執行)。',
+    #                     default=None)  # 新增參數
+    # parser.add_argument(
+    #     '--student_dropout_rate',
+    #     type=float,
+    #     default=0.2,
+    #     help='學生模型訓練和載入時使用的 Dropout Rate。')  # 將 Dropout Rate 可配置化
     args = parser.parse_args()
 
     setup_seed(111)  # 固定隨機種子
@@ -382,74 +411,74 @@ if __name__ == '__main__':
     # 開始訓練，並接收最佳模型路徑與結果
     train(args.arch, args.category, args.epochs, save_pth_path)
 
-    # --- 缺陷檢測熱力圖生成區塊 ---
-    test_path = f'./mvtec/{args.category}/test'  # 驗證資料路徑 (MVTec AD 的測試集)
-    if test_path:
-        print("\n--- 正在生成缺陷檢測熱力圖 ---")
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # # --- 缺陷檢測熱力圖生成區塊 ---
+    # test_path = f'./mvtec/{args.category}/test'  # 驗證資料路徑 (MVTec AD 的測試集)
+    # if test_path:
+    #     print("\n--- 正在生成缺陷檢測熱力圖 ---")
+    #     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        # 載入學生模型權重
-        # 這裡使用的 dropout_rate 應與訓練時使用的保持一致
-        student_model = StudentReconstructiveSubNetwork(
-            in_channels=3,
-            out_channels=3,
-            dropout_rate=args.student_dropout_rate).to(device)
-        student_model_seg = StudentDiscriminativeSubNetwork(
-            in_channels=6,
-            out_channels=2,
-            dropout_rate=args.student_dropout_rate).to(device)
+    #     # 載入學生模型權重
+    #     # 這裡使用的 dropout_rate 應與訓練時使用的保持一致
+    #     student_model = StudentReconstructiveSubNetwork(
+    #         in_channels=3,
+    #         out_channels=3,
+    #         dropout_rate=args.student_dropout_rate).to(device)
+    #     student_model_seg = StudentDiscriminativeSubNetwork(
+    #         in_channels=6,
+    #         out_channels=2,
+    #         dropout_rate=args.student_dropout_rate).to(device)
 
-        student_run_name = f"{args.arch}_student_{args.category}"
-        student_model_path = os.path.join(save_pth_path,
-                                          student_run_name + ".pckl")
-        student_model_seg_path = os.path.join(save_pth_path,
-                                              student_run_name + "_seg.pckl")
+    #     student_run_name = f"{args.arch}_student_{args.category}"
+    #     student_model_path = os.path.join(save_pth_path,
+    #                                       student_run_name + ".pckl")
+    #     student_model_seg_path = os.path.join(save_pth_path,
+    #                                           student_run_name + "_seg.pckl")
 
-        if os.path.exists(student_model_path) and os.path.exists(
-                student_model_seg_path):
-            student_model.load_state_dict(
-                torch.load(student_model_path, map_location=device))
-            student_model_seg.load_state_dict(
-                torch.load(student_model_seg_path, map_location=device))
-            print(
-                f"✅ 已成功載入學生模型權重: {student_model_path} 及 {student_model_seg_path}"
-            )
+    #     if os.path.exists(student_model_path) and os.path.exists(
+    #             student_model_seg_path):
+    #         student_model.load_state_dict(
+    #             torch.load(student_model_path, map_location=device))
+    #         student_model_seg.load_state_dict(
+    #             torch.load(student_model_seg_path, map_location=device))
+    #         print(
+    #             f"✅ 已成功載入學生模型權重: {student_model_path} 及 {student_model_seg_path}"
+    #         )
 
-            # 生成熱力圖
-            anomaly_heatmap, original_image_resized = generate_anomaly_heatmap(
-                test_path + args.test_image_path, student_model,
-                student_model_seg, device)
+    #         # 生成熱力圖
+    #         anomaly_heatmap, original_image_resized = generate_anomaly_heatmap(
+    #             test_path + args.test_image_path, student_model,
+    #             student_model_seg, device)
 
-            # 可視化結果
-            plt.figure(figsize=(12, 6))
+    #         # 可視化結果
+    #         plt.figure(figsize=(12, 6))
 
-            plt.subplot(1, 2, 1)
-            plt.imshow(original_image_resized)
-            plt.title("原始影像 (Resized)")
-            plt.axis('off')
+    #         plt.subplot(1, 2, 1)
+    #         plt.imshow(original_image_resized)
+    #         plt.title("原始影像 (Resized)")
+    #         plt.axis('off')
 
-            plt.subplot(1, 2, 2)
-            # 將熱力圖疊加在原始影像上
-            plt.imshow(original_image_resized, cmap='gray')  # 背景顯示原始影像
-            plt.imshow(anomaly_heatmap, cmap='jet', alpha=0.5, vmin=0,
-                       vmax=1)  # 疊加熱力圖
-            plt.colorbar(label='異常機率')
-            plt.title("缺陷熱力圖")
-            plt.axis('off')
+    #         plt.subplot(1, 2, 2)
+    #         # 將熱力圖疊加在原始影像上
+    #         plt.imshow(original_image_resized, cmap='gray')  # 背景顯示原始影像
+    #         plt.imshow(anomaly_heatmap, cmap='jet', alpha=0.5, vmin=0,
+    #                    vmax=1)  # 疊加熱力圖
+    #         plt.colorbar(label='異常機率')
+    #         plt.title("缺陷熱力圖")
+    #         plt.axis('off')
 
-            plt.tight_layout()
-            plt.show()
+    #         plt.tight_layout()
+    #         plt.show()
 
-            # (可選) 儲存熱力圖到檔案
-            heatmap_filename = os.path.join(
-                save_pth_path,
-                f"heatmap_{os.path.basename(args.test_image_path)}")
-            plt.savefig(heatmap_filename)
-            print(f"熱力圖已儲存至: {heatmap_filename}")
+    #         # (可選) 儲存熱力圖到檔案
+    #         heatmap_filename = os.path.join(
+    #             save_pth_path,
+    #             f"heatmap_{os.path.basename(args.test_image_path)}")
+    #         plt.savefig(heatmap_filename)
+    #         print(f"熱力圖已儲存至: {heatmap_filename}")
 
-        else:
-            print(
-                f"❌ 找不到學生模型權重，請確認路徑: {student_model_path} 或 {student_model_seg_path} 是否存在。"
-            )
-    else:
-        print("\n如需生成熱力圖，請在命令列中指定 '--test_image_path <影像路徑>'。")
+    #     else:
+    #         print(
+    #             f"❌ 找不到學生模型權重，請確認路徑: {student_model_path} 或 {student_model_seg_path} 是否存在。"
+    #         )
+    # else:
+    #     print("\n如需生成熱力圖，請在命令列中指定 '--test_image_path <影像路徑>'。")
