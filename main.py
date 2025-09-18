@@ -71,21 +71,33 @@ def train(_arch_, _class_, epochs, save_pth_path):
     teacher_model_seg.eval()
 
     # 學生模型
-    student_model = StudentReconstructiveSubNetwork(in_channels=3,
-                                                    out_channels=3)
-    student_model_seg = StudentDiscriminativeSubNetwork(in_channels=6,
-                                                        out_channels=2)
+    # 定義一個 dropout_rate，您可以將其作為 args 的一部分，或在這裡硬編碼
+    student_dropout_rate = 0.2  # 建議從 0.1-0.3 之間開始嘗試
+    student_model = StudentReconstructiveSubNetwork(
+        in_channels=3, out_channels=3,
+        dropout_rate=student_dropout_rate)  # 傳入 dropout_rate
+    student_model_seg = StudentDiscriminativeSubNetwork(
+        in_channels=6, out_channels=2,
+        dropout_rate=student_dropout_rate)  # 傳入 dropout_rate
+
     student_model = student_model.to(device)
     student_model_seg = student_model_seg.to(device)
 
     # === Step 3: 為學生模型定義優化器和學習率排程器 ===
-    optimizer = torch.optim.Adam([{
-        "params": student_model.parameters(),
-        "lr": args.lr
-    }, {
-        "params": student_model_seg.parameters(),
-        "lr": args.lr
-    }])
+    # 定義一個 weight_decay 值，您可以將其作為 args 的一部分，或在這裡硬編碼
+    optimizer_weight_decay = 1e-5  # 建議從 1e-5 或 1e-4 開始嘗試
+    optimizer = torch.optim.Adam([
+        {
+            "params": student_model.parameters(),
+            "lr": args.lr,
+            "weight_decay": optimizer_weight_decay  # 添加 L2 正則化 (weight_decay)
+        },
+        {
+            "params": student_model_seg.parameters(),
+            "lr": args.lr,
+            "weight_decay": optimizer_weight_decay  # 添加 L2 正則化 (weight_decay)
+        }
+    ])
     scheduler = optim.lr_scheduler.MultiStepLR(
         optimizer,
         milestones=[args.epochs * 0.8, args.epochs * 0.9],
@@ -109,8 +121,8 @@ def train(_arch_, _class_, epochs, save_pth_path):
         reduction='batchmean')  # 分割部分，用 KL 散度衡量機率分佈
 
     # 蒸餾超參數
-    T = 4.0  # 溫度 (Temperature)，讓教師的輸出更平滑，通常 > 1
-    alpha = 0.7  # 蒸餾權重，控制蒸餾損失在總損失中的佔比 (0.7 代表 70%)
+    T = 2.0  # 溫度 (Temperature)，讓教師的輸出更平滑，通常 > 1
+    alpha = 0.5  # 蒸餾權重，控制蒸餾損失在總損失中的佔比 (0.7 代表 70%)
 
     # === Step 5: 準備 Dataset 和 DataLoader ===
     print("Step 5: Preparing Dataset and DataLoader...")
@@ -138,10 +150,10 @@ def train(_arch_, _class_, epochs, save_pth_path):
 
     # === Step 6: 實現核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
-    best_loss = float('inf')
+    best_val_loss = float('inf')
 
     for epoch in range(args.epochs):
-        student_model.train()  # 確保學生模型處於訓練模式
+        student_model.train()  # 確保學生模型處於訓練模式，Dropout 啟用
         student_model_seg.train()
 
         running_loss = 0.0
@@ -206,7 +218,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
         print(f"Epoch {epoch+1} Average Loss: {epoch_loss:.4f}")
 
         # === 驗證階段 ===
-        student_model.eval()  # 設置學生模型為評估模式
+        student_model.eval()  # 設置學生模型為評估模式，Dropout 禁用
         student_model_seg.eval()
         val_running_loss = 0.0
 
@@ -260,8 +272,8 @@ def train(_arch_, _class_, epochs, save_pth_path):
         print(f"Epoch {epoch+1} Average Validation Loss: {epoch_val_loss:.4f}")
 
         # 檢查是否為最佳損失，若是則儲存權重
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
+        if epoch_loss < best_val_loss:
+            best_val_loss = epoch_loss
             student_run_name = f"{_arch_}_student_{_class_}"
             torch.save(student_model.state_dict(),
                        os.path.join(save_pth_path, student_run_name + ".pckl"))
@@ -269,7 +281,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 student_model_seg.state_dict(),
                 os.path.join(save_pth_path, student_run_name + "_seg.pckl"))
 
-            print(f"🎉 找到新的最佳模型！Loss: {best_loss:.4f}。已儲存至 {save_pth_path}")
+            print(f"🎉 找到新的最佳模型！Loss: {best_val_loss:.4f}。已儲存至 {save_pth_path}")
 
         scheduler.step()
     print("訓練完成！")
