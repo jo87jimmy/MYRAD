@@ -157,7 +157,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
     # === Step 6: 實現核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
     best_val_loss = float('inf')
-
+    n_iter = 0
     for epoch in range(args.epochs):
         student_model.train()  # 確保學生模型處於訓練模式，Dropout 啟用
         student_model_seg.train()
@@ -210,7 +210,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
             loss.backward()
             optimizer.step()
             # === 可視化 ===
-            if args.visualize and n_iter % 200 == 0:
+            if n_iter % 200 == 0:
                 visualizer.plot_loss(loss_hard_l2.item(),
                                      n_iter,
                                      loss_name='l2_loss')
@@ -220,7 +220,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 visualizer.plot_loss(loss_hard_segment.item(),
                                      n_iter,
                                      loss_name='segment_loss')
-            if args.visualize and n_iter % 400 == 0:
+            if n_iter % 400 == 0:
                 t_mask = student_out_mask_sm[:, 1:, :, :]
                 visualizer.visualize_image_batch(aug_gray_batch,
                                                  n_iter,
