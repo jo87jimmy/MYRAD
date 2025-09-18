@@ -115,7 +115,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
     print("Step 5: Preparing Dataset and DataLoader...")
 
     train_path = f'./mvtec/{_class_}/train'  # 訓練資料路徑
-    # test_path = f'./mvtec/{_class_}'  # 測試資料路徑
     anomaly_source_path = f'./dtd/images'
     dataset = MVTecDRAEMTrainDataset(train_path + "/good/",
                                      anomaly_source_path,
@@ -124,22 +123,15 @@ def train(_arch_, _class_, epochs, save_pth_path):
                             batch_size=args.bs,
                             shuffle=True,
                             num_workers=8)
-    # # 建立輸出資料夾
-    # save_pth_dir = save_pth_path if save_pth_path else 'pths/best'
-    # os.makedirs(save_pth_dir, exist_ok=True)
-
-    # # 設定最佳權重檔案存放路徑
-    # best_ckp_path = os.path.join(save_pth_dir, f'best_{_arch_}_{_class_}.pth')
 
     # === Step 6: 實現核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
     best_loss = float('inf')
-    # n_iter = 0
+
     for epoch in range(args.epochs):
         student_model.train()  # 確保學生模型處於訓練模式
         student_model_seg.train()
 
-        # === 新增：初始化每個 epoch 的損失累計變數 ===
         running_loss = 0.0
 
         print(f"Epoch: {epoch+1}/{args.epochs}")
@@ -196,7 +188,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
                     f"  Batch {i_batch}/{len(dataloader)}, Total Loss: {loss.item():.4f}, "
                     f"Hard Loss: {loss_hard.item():.4f}, Distill Loss: {loss_distill.item():.4f}"
                 )
-            # n_iter += 1
 
         # 計算此 epoch 的平均損失
         epoch_loss = running_loss / len(dataloader)
@@ -217,77 +208,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
         scheduler.step()
     print("訓練完成！")
 
-    # 建立輸出資料夾
-    # save_pth_dir = save_pth_path if save_pth_path else 'pths/best'
-    # os.makedirs(save_pth_dir, exist_ok=True)
-
-    # # 設定最佳權重檔案存放路徑
-    # best_ckp_path = os.path.join(save_pth_dir, f'best_{_arch_}_{_class_}.pth')
-
-    # # 初始化最佳分數
-    # best_score = -1
-
-    # # 訓練迴圈
-    # for epoch in range(epochs):
-    #     student_encoder.train()
-    #     student_decoder.train()
-    #     loss_list = []
-
-    #     for img, label in train_dataloader:
-    #         img = img.to(device)
-
-    #         # 教師模型推理
-    #         with torch.no_grad():
-    #             teacher_recon = teacher_encoder(img)
-    #             teacher_input = torch.cat([img, teacher_recon], dim=1)
-    #             teacher_seg = teacher_decoder(teacher_input)
-
-    #         # 學生模型推理
-    #         student_recon = student_encoder(img)
-    #         student_input = torch.cat([img, student_recon], dim=1)
-    #         student_seg = student_decoder(student_input)
-
-    #         # 蒸餾損失：比較相同語義的輸出
-    #         recon_loss = distillation_loss(teacher_recon, student_recon)
-    #         seg_loss = distillation_loss(teacher_seg, student_seg)
-
-    #         total_loss = recon_loss + seg_loss
-
-    #         optimizer.zero_grad()
-    #         total_loss.backward()  # 修正：使用 total_loss
-    #         optimizer.step()
-    #         loss_list.append(total_loss.item())
-
-    #     print(
-    #         f"📘 Epoch [{epoch + 1}/{epochs}] | Loss: {np.mean(loss_list):.4f}")
-
-    #     # 每個 epoch 都進行一次評估（使用學生模型）
-    #     # 需要添加 bn 層
-    #     #torch.nn.Identity() 作為一個恆等映射層，不會改變輸入數據，只是為了滿足 evaluation 函數的參數要求
-    #     #由於 torch.nn.Identity() 不改變輸入，所以 bn(inputs) 等同於直接傳遞 inputs，這樣就能讓您的 DREAM 架構正常工作。
-    #     # bn = torch.nn.Identity()  # 或者使用適當的 batch normalization 層
-    #     auroc_px, auroc_sp, aupro_px = dream_evaluation(student_encoder,
-    #                                             #   bn,
-    #                                               student_decoder,
-    #                                               test_dataloader, device)
-    #     # auroc_px, auroc_sp, aupro_px = evaluation(student_encoder,
-    #     #                                           student_decoder,
-    #     #                                           test_dataloader, device)
-    #     print(f"🔍 評估 | Pixel AUROC: {auroc_px:.3f}")
-
-    #     # 如果表現更好則儲存學生模型
-    #     if auroc_px > best_score:
-    #         best_score = auroc_px
-    #         torch.save(
-    #             {
-    #                 'encoder': student_encoder.state_dict(),
-    #                 'decoder': student_decoder.state_dict()
-    #             }, best_ckp_path)
-    #         print(f"💾 更新最佳模型 → {best_ckp_path}")
-
-    # # 訓練結束回傳最佳結果
-    # return best_ckp_path, best_score, auroc_sp, aupro_px, student_encoder, student_decoder
-
 
 if __name__ == '__main__':
     import argparse
@@ -305,7 +225,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     setup_seed(111)  # 固定隨機種子
-    # save_visual_path = f"results/{args.arch}_{args.category}"
     save_pth_path = f"pths/best_{args.arch}_{args.category}"
 
     # 建立輸出資料夾
@@ -314,27 +233,3 @@ if __name__ == '__main__':
 
     # 開始訓練，並接收最佳模型路徑與結果
     train(args.arch, args.category, args.epochs, save_pth_path)
-    # best_ckp, auroc_px, auroc_sp, aupro_px, bn, decoder = train(
-    #     args.arch, args.category, args.epochs, save_pth_path)
-
-    # print(f"最佳模型: {best_ckp}")
-
-    # # 存訓練指標到 CSV
-    # df_metrics = pd.DataFrame([{
-    #     'Category': args.category,
-    #     'Pixel_AUROC': auroc_px,
-    #     'Sample_AUROC': auroc_sp,
-    #     'Pixel_AUPRO': aupro_px,
-    #     'Epochs': args.epochs
-    # }])
-    # metrics_name = f"metrics_{args.arch}_{args.category}.csv"
-    # df_metrics.to_csv(metrics_name,
-    #                   mode='a',
-    #                   header=not os.path.exists(metrics_name),
-    #                   index=False)
-
-    # # 🔥 訓練結束後自動產生可視化結果
-    # visualizationDraem(args.arch,
-    #               args.category,
-    #               ckp_path=best_ckp,
-    #               save_path=save_visual_path)
