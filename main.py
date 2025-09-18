@@ -383,7 +383,8 @@ if __name__ == '__main__':
     train(args.arch, args.category, args.epochs, save_pth_path)
 
     # --- 缺陷檢測熱力圖生成區塊 ---
-    if args.test_image_path:
+    test_path = f'./mvtec/{args.category}/test'  # 驗證資料路徑 (MVTec AD 的測試集)
+    if test_path:
         print("\n--- 正在生成缺陷檢測熱力圖 ---")
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -416,7 +417,8 @@ if __name__ == '__main__':
 
             # 生成熱力圖
             anomaly_heatmap, original_image_resized = generate_anomaly_heatmap(
-                args.test_image_path, student_model, student_model_seg, device)
+                test_path + args.test_image_path, student_model,
+                student_model_seg, device)
 
             # 可視化結果
             plt.figure(figsize=(12, 6))
