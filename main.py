@@ -21,6 +21,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
 from tensorboard_visualizer import TensorboardVisualizer
+import cv2  # 匯入 OpenCV，用於影像處理
 
 
 def setup_seed(seed):
@@ -229,49 +230,41 @@ def train(_arch_, _class_, epochs, save_pth_path):
             student_out_mask_logits = student_model_seg(student_joined_in)
             student_out_mask = F.softmax(student_out_mask_logits,
                                          dim=1)[:, 1, ...]  # 取異常類別概率
-            # --- 可視化 ---
-            if i_batch == 0:  # 只顯示第一個 batch，避免顯示太多
-                batch_idx = 0  # 顯示 batch 中第一張圖
-                fig, axs = plt.subplots(2, 4, figsize=(16, 8))
+            # --- 可視化存檔 ---
+            if i_batch == 0:
+                batch_idx = 0
 
-                axs[0, 1].imshow(gray_batch[batch_idx, 0].cpu(), cmap='gray')
-                axs[0, 1].set_title("原始灰階圖")
-                axs[0, 1].axis('off')
+                # 將所有圖轉成 numpy, 並規範到 0~255
+                def to_uint8(img_tensor):
+                    img = img_tensor.cpu().numpy()
+                    img = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
+                    return img.astype(np.uint8)
 
-                axs[0, 2].imshow(aug_gray_batch[batch_idx, 0].cpu(),
-                                 cmap='gray')
-                axs[0, 2].set_title("增強後圖像")
-                axs[0, 2].axis('off')
+                gray_np = to_uint8(gray_batch[batch_idx, 0])
+                aug_np = to_uint8(aug_gray_batch[batch_idx, 0])
+                teacher_rec_np = to_uint8(teacher_rec[batch_idx, 0])
+                student_rec_np = to_uint8(student_rec[batch_idx, 0])
+                teacher_mask_np = cv2.applyColorMap(to_uint8(teacher_out_mask[batch_idx]), cv2.COLORMAP_JET)
+                student_mask_np = cv2.applyColorMap(to_uint8(student_out_mask[batch_idx]), cv2.COLORMAP_JET)
+                anomaly_mask_np = cv2.applyColorMap(to_uint8(anomaly_mask[batch_idx, 0]), cv2.COLORMAP_JET)
 
-                axs[0, 3].imshow(teacher_rec[batch_idx, 0].cpu(), cmap='gray')
-                axs[0, 3].set_title("教師模型重建")
-                axs[0, 3].axis('off')
+                # 將灰階圖轉成 3 通道
+                gray_np = cv2.cvtColor(gray_np, cv2.COLOR_GRAY2RGB)
+                aug_np = cv2.cvtColor(aug_np, cv2.COLOR_GRAY2RGB)
+                teacher_rec_np = cv2.cvtColor(teacher_rec_np, cv2.COLOR_GRAY2RGB)
+                student_rec_np = cv2.cvtColor(student_rec_np, cv2.COLOR_GRAY2RGB)
 
-                axs[1, 0].imshow(student_rec[batch_idx, 0].cpu(), cmap='gray')
-                axs[1, 0].set_title("學生模型重建")
-                axs[1, 0].axis('off')
+                # 將圖排列成 2x4
+                top_row = np.hstack([gray_np, aug_np, teacher_rec_np, teacher_mask_np])
+                bottom_row = np.hstack([student_rec_np, student_mask_np, anomaly_mask_np, np.zeros_like(student_rec_np)])
+                overlay = np.vstack([top_row, bottom_row])
 
-                axs[1, 1].imshow(teacher_out_mask[batch_idx].cpu(),
-                                 cmap='jet',
-                                 alpha=0.7)
-                axs[1, 1].set_title("教師分割結果")
-                axs[1, 1].axis('off')
+                # 確保資料夾存在
+                overlay_dir = "debug_images"
+                os.makedirs(overlay_dir, exist_ok=True)
 
-                axs[1, 2].imshow(student_out_mask[batch_idx].cpu(),
-                                 cmap='jet',
-                                 alpha=0.7)
-                axs[1, 2].set_title("學生分割結果")
-                axs[1, 2].axis('off')
-
-                axs[1, 3].imshow(anomaly_mask[batch_idx, 0].cpu(),
-                                 cmap='jet',
-                                 alpha=0.5)
-                axs[1, 3].set_title("原始異常遮罩")
-                axs[1, 3].axis('off')
-
-                plt.tight_layout()
-                plt.savefig("debug.png")
-                plt.show()
+                overlay_path = os.path.join(overlay_dir, "debug.png")
+                cv2.imwrite(overlay_path, cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
             # --- 計算損失 ---
             # 1. 硬損失
