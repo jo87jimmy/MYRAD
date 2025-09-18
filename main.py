@@ -45,32 +45,9 @@ def distillation_loss(teacher_features, student_features):
 def train(_arch_, _class_, epochs, save_pth_path):
     # 訓練流程
     print(f"🔧 類別: {_class_} | Epochs: {epochs}")
-    learning_rate = 0.005  # 學習率
-    # batch_size = 16 # 批次大小
-    image_size = 256  # 輸入影像大小
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'  # 選擇裝置
     print(f"🖥️ 使用裝置: {device}")
-
-    # # 資料轉換
-    # data_transform, gt_transform = get_data_transforms(image_size, image_size)
-    # train_path = f'./mvtec/{_class_}/train'  # 訓練資料路徑
-    # test_path = f'./mvtec/{_class_}'  # 測試資料路徑
-
-    # # 載入訓練與測試資料
-    # train_data = ImageFolder(root=train_path, transform=data_transform)
-    # test_data = MVTecDataset(root=test_path,
-    #                          transform=data_transform,
-    #                          gt_transform=gt_transform,
-    #                          phase="test")
-
-    # # 建立 DataLoader
-    # train_dataloader = torch.utils.data.DataLoader(train_data,
-    #                                                batch_size=batch_size,
-    #                                                shuffle=True)
-    # test_dataloader = torch.utils.data.DataLoader(test_data,
-    #                                               batch_size=1,
-    #                                               shuffle=False)
 
     # 教師模型 (已載入權重並設為 eval 模式)
     teacher_model = ReconstructiveSubNetwork(in_channels=3, out_channels=3)
@@ -147,13 +124,23 @@ def train(_arch_, _class_, epochs, save_pth_path):
                             batch_size=args.bs,
                             shuffle=True,
                             num_workers=8)
+    # # 建立輸出資料夾
+    # save_pth_dir = save_pth_path if save_pth_path else 'pths/best'
+    # os.makedirs(save_pth_dir, exist_ok=True)
+
+    # # 設定最佳權重檔案存放路徑
+    # best_ckp_path = os.path.join(save_pth_dir, f'best_{_arch_}_{_class_}.pth')
 
     # === Step 6: 實現核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
-    n_iter = 0
+    best_loss = float('inf')
+    # n_iter = 0
     for epoch in range(args.epochs):
         student_model.train()  # 確保學生模型處於訓練模式
         student_model_seg.train()
+
+        # === 新增：初始化每個 epoch 的損失累計變數 ===
+        running_loss = 0.0
 
         print(f"Epoch: {epoch+1}/{args.epochs}")
         for i_batch, sample_batched in enumerate(dataloader):
@@ -201,25 +188,34 @@ def train(_arch_, _class_, epochs, save_pth_path):
             loss.backward()
             optimizer.step()
 
-            if i_batch % 100 == 0:  # 每 100 個 batch 打印一次 log
+            # === 修改：累計當前 batch 的損失 ===
+            running_loss += loss.item()
+
+            if i_batch % 100 == 0:
                 print(
                     f"  Batch {i_batch}/{len(dataloader)}, Total Loss: {loss.item():.4f}, "
                     f"Hard Loss: {loss_hard.item():.4f}, Distill Loss: {loss_distill.item():.4f}"
                 )
-            n_iter += 1
+            # n_iter += 1
+
+        # 計算此 epoch 的平均損失
+        epoch_loss = running_loss / len(dataloader)
+        print(f"Epoch {epoch+1} Average Loss: {epoch_loss:.4f}")
+
+        # 檢查是否為最佳損失，若是則儲存權重
+        if epoch_loss < best_loss:
+            best_loss = epoch_loss
+            student_run_name = f"{_arch_}_student_{_class_}"
+            torch.save(student_model.state_dict(),
+                       os.path.join(save_pth_path, student_run_name + ".pckl"))
+            torch.save(
+                student_model_seg.state_dict(),
+                os.path.join(save_pth_path, student_run_name + "_seg.pckl"))
+
+            print(f"🎉 找到新的最佳模型！Loss: {best_loss:.4f}。已儲存至 {save_pth_path}")
 
         scheduler.step()
-
-    # === Step 7: 儲存訓練好的學生模型 ===
-    print("Step 7: Saving the trained student model...")
-    # 為學生模型設定一個新的儲存名稱
-    student_run_name = f"{_arch_}_student_{_class_}"
-    torch.save(student_model.state_dict(),
-               os.path.join(save_pth_path, student_run_name + ".pckl"))
-    torch.save(student_model_seg.state_dict(),
-               os.path.join(save_pth_path, student_run_name + "_seg.pckl"))
-
-    print(f"✅ 模型已訓練並儲存至 {save_pth_path}")
+    print("訓練完成！")
 
     # 建立輸出資料夾
     # save_pth_dir = save_pth_path if save_pth_path else 'pths/best'
