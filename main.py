@@ -202,23 +202,81 @@ def train(_arch_, _class_, epochs, save_pth_path):
 
         print(f"Epoch: {epoch+1}/{args.epochs}")
         for i_batch, sample_batched in enumerate(dataloader):
-            # 取得 batch 資料
-            gray_batch = sample_batched["image"].to(device)
-            aug_gray_batch = sample_batched["augmented_image"].to(device)
-            anomaly_mask = sample_batched["anomaly_mask"].to(device)
+            # 取得 batch 資料，每個 batch 包含原始灰階圖像、增強後圖像，以及異常遮罩
+            orig_batch = sample_batched["orig_image"].to(device)  # 原始彩色圖
+            gray_batch = sample_batched["image"].to(
+                device)  # 原始灰階圖，送到 GPU 或 CPU
+            aug_gray_batch = sample_batched["augmented_image"].to(
+                device)  # 增強後的灰階圖像
+            anomaly_mask = sample_batched["anomaly_mask"].to(device)  # 異常區域遮罩
 
             # --- 教師模型前向傳播 ---
-            with torch.no_grad():  # 教師模型不更新權重
-                teacher_rec = teacher_model(aug_gray_batch)
+            with torch.no_grad():  # 教師模型不更新權重，只做推論
+                teacher_rec = teacher_model(aug_gray_batch)  # 教師模型對增強後圖像做重建
+                # 將教師模型重建結果與增強圖像合併，形成輸入給分割模型
                 teacher_joined_in = torch.cat((teacher_rec, aug_gray_batch),
                                               dim=1)
+                # 教師模型分割頭輸出異常遮罩的 logits
                 teacher_out_mask_logits = teacher_model_seg(teacher_joined_in)
+                teacher_out_mask = F.softmax(teacher_out_mask_logits,
+                                             dim=1)[:, 1, ...]  # 取異常類別概率
 
             # --- 學生模型前向傳播 ---
-            student_rec = student_model(aug_gray_batch)
+            student_rec = student_model(aug_gray_batch)  # 學生模型對增強後圖像做重建
+            # 將學生模型重建結果與增強圖像合併，形成輸入給分割模型
             student_joined_in = torch.cat((student_rec, aug_gray_batch), dim=1)
+            # 學生模型分割頭輸出異常遮罩的 logits
             student_out_mask_logits = student_model_seg(student_joined_in)
+            student_out_mask = F.softmax(student_out_mask_logits,
+                                         dim=1)[:, 1, ...]  # 取異常類別概率
+            # --- 可視化 ---
+            if i_batch == 0:  # 只顯示第一個 batch，避免顯示太多
+                batch_idx = 0  # 顯示 batch 中第一張圖
+                fig, axs = plt.subplots(2, 3, figsize=(12, 8))
 
+                axs[0, 0].imshow(orig_batch[batch_idx].permute(
+                    1, 2, 0).cpu())  # 彩色圖需 permute
+                axs[0, 0].set_title("原始彩色圖")
+                axs[0, 0].axis('off')
+
+                axs[0, 0].imshow(gray_batch[batch_idx, 0].cpu(), cmap='gray')
+                axs[0, 0].set_title("原始灰階圖")
+                axs[0, 0].axis('off')
+
+                axs[0, 1].imshow(aug_gray_batch[batch_idx, 0].cpu(),
+                                 cmap='gray')
+                axs[0, 1].set_title("增強後圖像")
+                axs[0, 1].axis('off')
+
+                axs[0, 2].imshow(teacher_rec[batch_idx, 0].cpu(), cmap='gray')
+                axs[0, 2].set_title("教師模型重建")
+                axs[0, 2].axis('off')
+
+                axs[1, 0].imshow(student_rec[batch_idx, 0].cpu(), cmap='gray')
+                axs[1, 0].set_title("學生模型重建")
+                axs[1, 0].axis('off')
+
+                axs[1, 1].imshow(teacher_out_mask[batch_idx].cpu(),
+                                 cmap='jet',
+                                 alpha=0.7)
+                axs[1, 1].set_title("教師分割結果")
+                axs[1, 1].axis('off')
+
+                axs[1, 2].imshow(student_out_mask[batch_idx].cpu(),
+                                 cmap='jet',
+                                 alpha=0.7)
+                axs[1, 2].set_title("學生分割結果")
+                axs[1, 2].axis('off')
+
+                axs[1, 3].imshow(anomaly_mask[batch_idx, 0].cpu(),
+                                 cmap='jet',
+                                 alpha=0.5)
+
+                axs[1, 3].set_title("原始異常遮罩")
+                axs[1, 3].axis('off')
+
+                plt.tight_layout()
+                plt.show()
             # --- 計算損失 ---
             # 1. 硬損失
             loss_hard_l2 = loss_l2(student_rec, gray_batch)  # L2 損失
@@ -244,56 +302,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
             optimizer.zero_grad()  # 清空梯度
             loss.backward()  # 反向傳播
             optimizer.step()  # 更新權重
-
-            # # --- 可視化 ---
-            # if i_batch % 100 == 0:
-            #     visualizer.plot_loss(loss_hard_l2.item(),
-            #                          n_iter,
-            #                          loss_name='l2_loss')
-            #     visualizer.plot_loss(loss_hard_ssim.item(),
-            #                          n_iter,
-            #                          loss_name='ssim_loss')
-            #     visualizer.plot_loss(loss_hard_segment.item(),
-            #                          n_iter,
-            #                          loss_name='segment_loss')
-
-            # if i_batch == 0:  # batch 首筆，生成熱力圖（訓練集可視化）
-            #     # 根據學生模型的重建結果和分割結果，生成一張熱力圖（顯示異常區域）
-            #     anomaly_map = generate_anomaly_map(student_rec,
-            #                                        gray_batch,
-            #                                        student_out_mask_sm,
-            #                                        mode='recon+seg')
-            #     # 把熱力圖送到 TensorBoard 進行可視化，名稱為 'anomaly_map'
-            #     visualizer.visualize_image_batch(anomaly_map,
-            #                                      n_iter,
-            #                                      image_name='anomaly_map')
-            #     # 提取分割結果的異常通道 (假設通道 1 是異常類別)
-            #     t_mask = student_out_mask_sm[:, 1:, :, :]
-
-            #     # 將經過增強的輸入影像送到 TensorBoard 可視化，名稱為 'batch_augmented'
-            #     visualizer.visualize_image_batch(aug_gray_batch,
-            #                                      n_iter,
-            #                                      image_name='batch_augmented')
-
-            #     # 將原始重建目標（正常圖像）送到 TensorBoard 可視化，名稱為 'batch_recon_target'
-            #     visualizer.visualize_image_batch(gray_batch,
-            #                                      n_iter,
-            #                                      image_name='batch_recon_target')
-
-            #     # 將學生模型的重建輸出送到 TensorBoard 可視化，名稱為 'batch_recon_out'
-            #     visualizer.visualize_image_batch(student_rec,
-            #                                      n_iter,
-            #                                      image_name='batch_recon_out')
-
-            #     # 將真實異常標註掩碼送到 TensorBoard 可視化，名稱為 'mask_target'
-            #     visualizer.visualize_image_batch(anomaly_mask,
-            #                                      n_iter,
-            #                                      image_name='mask_target')
-
-            #     # 將學生模型分割輸出（異常通道）送到 TensorBoard 可視化，名稱為 'mask_out'
-            #     visualizer.visualize_image_batch(t_mask,
-            #                                      n_iter,
-            #                                      image_name='mask_out')
 
             running_loss += loss.item()  # 累計 batch 損失
             n_iter += 1  # 更新總迭代次數
