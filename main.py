@@ -235,10 +235,10 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 batch_idx = 0
 
                 # 將所有圖轉成 numpy, 並規範到 0~255
-                def to_uint8(img_tensor):
-                    img = img_tensor.cpu().numpy()
-                    img = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
-                    return img.astype(np.uint8)
+            def to_uint8(img_tensor):
+                img = img_tensor.detach().cpu().numpy()
+                img = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
+                return img.astype(np.uint8)
 
                 gray_np = to_uint8(gray_batch[batch_idx, 0])
                 aug_np = to_uint8(aug_gray_batch[batch_idx, 0])
