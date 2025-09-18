@@ -15,6 +15,7 @@ from student_models import StudentReconstructiveSubNetwork, StudentDiscriminativ
 from loss import FocalLoss, SSIM
 from data_loader import MVTecDRAEMTrainDataset
 from torch import optim
+from data_loader_val import MVTecDRAEMValidationDataset
 
 
 def setup_seed(seed):
@@ -124,6 +125,17 @@ def train(_arch_, _class_, epochs, save_pth_path):
                             shuffle=True,
                             num_workers=8)
 
+    # --- 添加驗證資料載入器 ---
+    val_path = f'./mvtec/{_class_}/test'  # 驗證資料路徑 (MVTec AD 的測試集)
+    val_dataset = MVTecDRAEMValidationDataset(val_path,
+                                              resize_shape=[256, 256])
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=args.bs,  # 驗證集可以與訓練集使用相同 batch_size
+        shuffle=False,  # 驗證集通常不需要打亂
+        num_workers=8)  # 保持與訓練集相同的 num_workers 或根據需求調整
+    print("Validation DataLoader prepared.")
+
     # === Step 6: 實現核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
     best_loss = float('inf')
@@ -192,6 +204,60 @@ def train(_arch_, _class_, epochs, save_pth_path):
         # 計算此 epoch 的平均損失
         epoch_loss = running_loss / len(dataloader)
         print(f"Epoch {epoch+1} Average Loss: {epoch_loss:.4f}")
+
+        # === 驗證階段 ===
+        student_model.eval()  # 設置學生模型為評估模式
+        student_model_seg.eval()
+        val_running_loss = 0.0
+
+        with torch.no_grad():  # 驗證階段不需要計算梯度
+            for i_batch_val, sample_batched_val in enumerate(
+                    val_dataloader):  # 假設有一個 val_dataloader
+                gray_batch_val = sample_batched_val["image"].to(device)
+                aug_gray_batch_val = sample_batched_val["augmented_image"].to(
+                    device)
+                anomaly_mask_val = sample_batched_val["anomaly_mask"].to(
+                    device)
+
+                # --- 教師模型前向傳播 (不計算梯度) ---
+                teacher_rec_val = teacher_model(aug_gray_batch_val)
+                teacher_joined_in_val = torch.cat(
+                    (teacher_rec_val, aug_gray_batch_val), dim=1)
+                teacher_out_mask_logits_val = teacher_model_seg(
+                    teacher_joined_in_val)
+
+                # --- 學生模型前向傳播 ---
+                student_rec_val = student_model(aug_gray_batch_val)
+                student_joined_in_val = torch.cat(
+                    (student_rec_val, aug_gray_batch_val), dim=1)
+                student_out_mask_logits_val = student_model_seg(
+                    student_joined_in_val)
+
+                # --- 計算驗證損失 ---
+                loss_hard_l2_val = loss_l2(student_rec_val, gray_batch_val)
+                loss_hard_ssim_val = loss_ssim(student_rec_val, gray_batch_val)
+                student_out_mask_sm_val = F.softmax(
+                    student_out_mask_logits_val, dim=1)
+                loss_hard_segment_val = loss_focal(student_out_mask_sm_val,
+                                                   anomaly_mask_val)
+                loss_hard_val = loss_hard_l2_val + loss_hard_ssim_val + loss_hard_segment_val
+
+                loss_distill_recon_val = loss_distill_recon_fn(
+                    student_rec_val, teacher_rec_val)
+                p_student_val = F.log_softmax(student_out_mask_logits_val / T,
+                                              dim=1)
+                p_teacher_val = F.softmax(teacher_out_mask_logits_val / T,
+                                          dim=1)
+                loss_distill_segment_val = loss_kldiv(p_student_val,
+                                                      p_teacher_val) * (T * T)
+                loss_distill_val = loss_distill_recon_val + loss_distill_segment_val
+
+                val_loss = (1 -
+                            alpha) * loss_hard_val + alpha * loss_distill_val
+                val_running_loss += val_loss.item()
+
+        epoch_val_loss = val_running_loss / len(val_dataloader)
+        print(f"Epoch {epoch+1} Average Validation Loss: {epoch_val_loss:.4f}")
 
         # 檢查是否為最佳損失，若是則儲存權重
         if epoch_loss < best_loss:
