@@ -299,6 +299,9 @@ def train(_arch_, _class_, epochs, save_pth_path):
         student_model_seg.eval()
         val_running_loss = 0.0
 
+        # 選擇一個 batch 用於可視化（確保含缺陷）
+        visualize_batch_done = False
+
         with torch.no_grad():  # 驗證不更新權重
             for i_batch_val, sample_batched_val in enumerate(val_dataloader):
                 gray_batch_val = sample_batched_val["image"].to(device)
@@ -344,7 +347,8 @@ def train(_arch_, _class_, epochs, save_pth_path):
                             alpha) * loss_hard_val + alpha * loss_distill_val
                 val_running_loss += val_loss.item()
 
-                if i_batch_val == 0:  # 驗證集首 batch，生成熱力圖
+                # 只生成一個含缺陷的 batch 作為熱力圖
+                if not visualize_batch_done and anomaly_mask_val.sum() > 0:
                     anomaly_map_val = generate_anomaly_map(
                         student_rec_val,
                         gray_batch_val,
@@ -352,20 +356,23 @@ def train(_arch_, _class_, epochs, save_pth_path):
                         mode='recon+seg')
                     visualizer.visualize_image_batch(
                         anomaly_map_val, n_iter, image_name='val_anomaly_map')
+                    visualize_batch_done = True
 
         epoch_val_loss = val_running_loss / len(val_dataloader)
         print(f"Epoch {epoch+1} Average Validation Loss: {epoch_val_loss:.4f}")
 
         # 檢查是否最佳模型，若是就保存
-        if epoch_loss < best_val_loss:
-            best_val_loss = epoch_loss
+        if epoch_val_loss < best_val_loss:  # ✅ 用驗證集損失
+            best_val_loss = epoch_val_loss
             student_run_name = f"{_arch_}_student_{_class_}"
             torch.save(student_model.state_dict(),
                        os.path.join(save_pth_path, student_run_name + ".pckl"))
             torch.save(
                 student_model_seg.state_dict(),
                 os.path.join(save_pth_path, student_run_name + "_seg.pckl"))
-            print(f"🎉 找到新的最佳模型！Loss: {best_val_loss:.4f}。已儲存至 {save_pth_path}")
+            print(
+                f"🎉 找到新的最佳模型！Validation Loss: {best_val_loss:.4f}。已儲存至 {save_pth_path}"
+            )
 
         scheduler.step()  # 更新學習率
     print("訓練完成！")  # 訓練結束
