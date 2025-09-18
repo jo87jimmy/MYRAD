@@ -245,41 +245,55 @@ def train(_arch_, _class_, epochs, save_pth_path):
             loss.backward()  # 反向傳播
             optimizer.step()  # 更新權重
 
-            # --- 可視化 ---
-            if i_batch % 100 == 0:
-                visualizer.plot_loss(loss_hard_l2.item(),
-                                     n_iter,
-                                     loss_name='l2_loss')
-                visualizer.plot_loss(loss_hard_ssim.item(),
-                                     n_iter,
-                                     loss_name='ssim_loss')
-                visualizer.plot_loss(loss_hard_segment.item(),
-                                     n_iter,
-                                     loss_name='segment_loss')
+            # # --- 可視化 ---
+            # if i_batch % 100 == 0:
+            #     visualizer.plot_loss(loss_hard_l2.item(),
+            #                          n_iter,
+            #                          loss_name='l2_loss')
+            #     visualizer.plot_loss(loss_hard_ssim.item(),
+            #                          n_iter,
+            #                          loss_name='ssim_loss')
+            #     visualizer.plot_loss(loss_hard_segment.item(),
+            #                          n_iter,
+            #                          loss_name='segment_loss')
 
-            if i_batch == 0:  # batch 首筆，生成熱力圖
-                anomaly_map = generate_anomaly_map(student_rec,
-                                                   gray_batch,
-                                                   student_out_mask_sm,
-                                                   mode='recon+seg')
-                visualizer.visualize_image_batch(anomaly_map,
-                                                 n_iter,
-                                                 image_name='anomaly_map')
-                t_mask = student_out_mask_sm[:, 1:, :, :]
-                visualizer.visualize_image_batch(aug_gray_batch,
-                                                 n_iter,
-                                                 image_name='batch_augmented')
-                visualizer.visualize_image_batch(
-                    gray_batch, n_iter, image_name='batch_recon_target')
-                visualizer.visualize_image_batch(student_rec,
-                                                 n_iter,
-                                                 image_name='batch_recon_out')
-                visualizer.visualize_image_batch(anomaly_mask,
-                                                 n_iter,
-                                                 image_name='mask_target')
-                visualizer.visualize_image_batch(t_mask,
-                                                 n_iter,
-                                                 image_name='mask_out')
+            # if i_batch == 0:  # batch 首筆，生成熱力圖（訓練集可視化）
+            #     # 根據學生模型的重建結果和分割結果，生成一張熱力圖（顯示異常區域）
+            #     anomaly_map = generate_anomaly_map(student_rec,
+            #                                        gray_batch,
+            #                                        student_out_mask_sm,
+            #                                        mode='recon+seg')
+            #     # 把熱力圖送到 TensorBoard 進行可視化，名稱為 'anomaly_map'
+            #     visualizer.visualize_image_batch(anomaly_map,
+            #                                      n_iter,
+            #                                      image_name='anomaly_map')
+            #     # 提取分割結果的異常通道 (假設通道 1 是異常類別)
+            #     t_mask = student_out_mask_sm[:, 1:, :, :]
+
+            #     # 將經過增強的輸入影像送到 TensorBoard 可視化，名稱為 'batch_augmented'
+            #     visualizer.visualize_image_batch(aug_gray_batch,
+            #                                      n_iter,
+            #                                      image_name='batch_augmented')
+
+            #     # 將原始重建目標（正常圖像）送到 TensorBoard 可視化，名稱為 'batch_recon_target'
+            #     visualizer.visualize_image_batch(gray_batch,
+            #                                      n_iter,
+            #                                      image_name='batch_recon_target')
+
+            #     # 將學生模型的重建輸出送到 TensorBoard 可視化，名稱為 'batch_recon_out'
+            #     visualizer.visualize_image_batch(student_rec,
+            #                                      n_iter,
+            #                                      image_name='batch_recon_out')
+
+            #     # 將真實異常標註掩碼送到 TensorBoard 可視化，名稱為 'mask_target'
+            #     visualizer.visualize_image_batch(anomaly_mask,
+            #                                      n_iter,
+            #                                      image_name='mask_target')
+
+            #     # 將學生模型分割輸出（異常通道）送到 TensorBoard 可視化，名稱為 'mask_out'
+            #     visualizer.visualize_image_batch(t_mask,
+            #                                      n_iter,
+            #                                      image_name='mask_out')
 
             running_loss += loss.item()  # 累計 batch 損失
             n_iter += 1  # 更新總迭代次數
@@ -347,16 +361,45 @@ def train(_arch_, _class_, epochs, save_pth_path):
                             alpha) * loss_hard_val + alpha * loss_distill_val
                 val_running_loss += val_loss.item()
 
-                # 只生成一個含缺陷的 batch 作為熱力圖
+                # 只生成第一個含缺陷的 batch 的熱力圖，避免畫出全是正常樣本的圖
                 if not visualize_batch_done and anomaly_mask_val.sum() > 0:
+                    # 生成異常熱力圖（重建誤差 + 分割結果）
                     anomaly_map_val = generate_anomaly_map(
                         student_rec_val,
                         gray_batch_val,
                         student_out_mask_sm_val,
                         mode='recon+seg')
+                    # 可視化熱力圖
                     visualizer.visualize_image_batch(
                         anomaly_map_val, n_iter, image_name='val_anomaly_map')
-                    visualize_batch_done = True
+
+                    # 提取分割結果異常通道
+                    t_mask_val = student_out_mask_sm_val[:, 1:, :, :]
+
+                    # 將增強圖送到 TensorBoard
+                    visualizer.visualize_image_batch(
+                        aug_gray_batch_val,
+                        n_iter,
+                        image_name='val_batch_augmented')
+                    # 將重建目標（原始圖）送到 TensorBoard
+                    visualizer.visualize_image_batch(
+                        gray_batch_val,
+                        n_iter,
+                        image_name='val_batch_recon_target')
+                    # 將學生模型重建輸出送到 TensorBoard
+                    visualizer.visualize_image_batch(
+                        student_rec_val,
+                        n_iter,
+                        image_name='val_batch_recon_out')
+                    # 將真實異常掩碼送到 TensorBoard
+                    visualizer.visualize_image_batch(
+                        anomaly_mask_val, n_iter, image_name='val_mask_target')
+                    # 將學生模型分割輸出異常通道送到 TensorBoard
+                    visualizer.visualize_image_batch(t_mask_val,
+                                                     n_iter,
+                                                     image_name='val_mask_out')
+
+                    visualize_batch_done = True  # 標記已生成熱力圖，避免重複
 
         epoch_val_loss = val_running_loss / len(val_dataloader)
         print(f"Epoch {epoch+1} Average Validation Loss: {epoch_val_loss:.4f}")
