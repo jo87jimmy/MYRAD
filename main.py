@@ -48,6 +48,39 @@ def distillation_loss(teacher_features, student_features):
     return loss
 
 
+def generate_anomaly_map(student_rec,
+                         gray_batch,
+                         student_out_mask_sm,
+                         mode='recon+seg'):
+    """
+    生成缺陷熱力圖
+    mode:
+        'recon'       : 使用重建誤差 L2
+        'seg'         : 使用分割 softmax 的缺陷通道
+        'recon+seg'   : L2 重建誤差與分割概率加權
+    """
+    if mode == 'recon':
+        # L2 重建誤差
+        recon_error = torch.mean((student_rec - gray_batch)**2,
+                                 dim=1,
+                                 keepdim=True)  # [B,1,H,W]
+        anomaly_map = recon_error
+    elif mode == 'seg':
+        # 使用缺陷分割 softmax 的第 1 通道 (假設 0 是正常, 1 是缺陷)
+        anomaly_map = student_out_mask_sm[:, 1:, :, :]
+    elif mode == 'recon+seg':
+        recon_error = torch.mean((student_rec - gray_batch)**2,
+                                 dim=1,
+                                 keepdim=True)
+        seg_prob = student_out_mask_sm[:, 1:, :, :]
+        anomaly_map = recon_error + seg_prob  # 簡單加權
+        anomaly_map = anomaly_map / anomaly_map.max()  # Normalize to [0,1]
+    else:
+        raise ValueError(f"Unknown mode {mode}")
+
+    return anomaly_map
+
+
 def train(_arch_, _class_, epochs, save_pth_path):
     # 訓練流程
     print(f"🔧 類別: {_class_} | Epochs: {epochs}")
@@ -221,6 +254,14 @@ def train(_arch_, _class_, epochs, save_pth_path):
                                      n_iter,
                                      loss_name='segment_loss')
             if i_batch == 0:
+                # --- 生成熱力圖 ---
+                anomaly_map = generate_anomaly_map(student_rec,
+                                                   gray_batch,
+                                                   student_out_mask_sm,
+                                                   mode='recon+seg')
+                visualizer.visualize_image_batch(anomaly_map,
+                                                 n_iter,
+                                                 image_name='anomaly_map')
                 t_mask = student_out_mask_sm[:, 1:, :, :]
                 visualizer.visualize_image_batch(aug_gray_batch,
                                                  n_iter,
