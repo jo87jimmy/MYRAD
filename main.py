@@ -203,6 +203,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
         print(f"Epoch: {epoch+1}/{args.epochs}")
         for i_batch, sample_batched in enumerate(dataloader):
             # 取得 batch 資料，每個 batch 包含原始灰階圖像、增強後圖像，以及異常遮罩
+            orig_batch = sample_batched["orig_image"].to(device)  # 原始彩色圖
             gray_batch = sample_batched["image"].to(
                 device)  # 原始灰階圖，送到 GPU 或 CPU
             aug_gray_batch = sample_batched["augmented_image"].to(
@@ -231,41 +232,51 @@ def train(_arch_, _class_, epochs, save_pth_path):
             # --- 可視化 ---
             if i_batch == 0:  # 只顯示第一個 batch，避免顯示太多
                 batch_idx = 0  # 顯示 batch 中第一張圖
-                # 將各張圖轉成 numpy 格式，C,H,W -> H,W,C
-                gray_img = gray_batch[batch_idx, 0].cpu().numpy()
-                aug_gray_img = aug_gray_batch[batch_idx, 0].cpu().numpy()
-                teacher_rec_img = teacher_rec[batch_idx, 0].cpu().numpy()
-                student_rec_img = student_rec[batch_idx, 0].cpu().numpy()
-                teacher_mask_img = teacher_out_mask[batch_idx].cpu().numpy()
-                student_mask_img = student_out_mask[batch_idx].cpu().numpy()
-                anomaly_mask_img = anomaly_mask[batch_idx, 0].cpu().numpy()
+                fig, axs = plt.subplots(2, 4, figsize=(16, 8))
 
-                # 用 visualizer 儲存
-                visualizer.add_image("原始灰階圖", gray_img, epoch, cmap='gray')
-                visualizer.add_image("增強後圖像", aug_gray_img, epoch, cmap='gray')
-                visualizer.add_image("教師模型重建",
-                                     teacher_rec_img,
-                                     epoch,
-                                     cmap='gray')
-                visualizer.add_image("學生模型重建",
-                                     student_rec_img,
-                                     epoch,
-                                     cmap='gray')
-                visualizer.add_image("教師分割結果",
-                                     teacher_mask_img,
-                                     epoch,
-                                     cmap='jet',
-                                     alpha=0.7)
-                visualizer.add_image("學生分割結果",
-                                     student_mask_img,
-                                     epoch,
-                                     cmap='jet',
-                                     alpha=0.7)
-                visualizer.add_image("原始異常遮罩",
-                                     anomaly_mask_img,
-                                     epoch,
-                                     cmap='jet',
-                                     alpha=0.5)
+                axs[0, 0].imshow(orig_batch[batch_idx].permute(1, 2, 0).cpu())
+                axs[0, 0].set_title("原始彩色圖")
+                axs[0, 0].axis('off')
+
+                axs[0, 1].imshow(gray_batch[batch_idx, 0].cpu(), cmap='gray')
+                axs[0, 1].set_title("原始灰階圖")
+                axs[0, 1].axis('off')
+
+                axs[0, 2].imshow(aug_gray_batch[batch_idx, 0].cpu(),
+                                 cmap='gray')
+                axs[0, 2].set_title("增強後圖像")
+                axs[0, 2].axis('off')
+
+                axs[0, 3].imshow(teacher_rec[batch_idx, 0].cpu(), cmap='gray')
+                axs[0, 3].set_title("教師模型重建")
+                axs[0, 3].axis('off')
+
+                axs[1, 0].imshow(student_rec[batch_idx, 0].cpu(), cmap='gray')
+                axs[1, 0].set_title("學生模型重建")
+                axs[1, 0].axis('off')
+
+                axs[1, 1].imshow(teacher_out_mask[batch_idx].cpu(),
+                                 cmap='jet',
+                                 alpha=0.7)
+                axs[1, 1].set_title("教師分割結果")
+                axs[1, 1].axis('off')
+
+                axs[1, 2].imshow(student_out_mask[batch_idx].cpu(),
+                                 cmap='jet',
+                                 alpha=0.7)
+                axs[1, 2].set_title("學生分割結果")
+                axs[1, 2].axis('off')
+
+                axs[1, 3].imshow(anomaly_mask[batch_idx, 0].cpu(),
+                                 cmap='jet',
+                                 alpha=0.5)
+                axs[1, 3].set_title("原始異常遮罩")
+                axs[1, 3].axis('off')
+
+                plt.tight_layout()
+                plt.savefig("debug.png")
+                plt.show()
+
             # --- 計算損失 ---
             # 1. 硬損失
             loss_hard_l2 = loss_l2(student_rec, gray_batch)  # L2 損失
