@@ -35,17 +35,20 @@ def setup_seed(seed):
 
 # 蒸餾損失函數
 def distillation_loss(teacher_features, student_features):
-    cos_loss = torch.nn.CosineSimilarity()
+    # 計算學生模型與教師模型特徵的 Cosine 相似度損失
+    cos_loss = torch.nn.CosineSimilarity()  # 初始化 CosineSimilarity
     if not isinstance(teacher_features, (list, tuple)):
+        # 如果輸入不是 list 或 tuple，就轉成 list，方便迭代
         teacher_features, student_features = [teacher_features
                                               ], [student_features]
 
-    loss = 0
+    loss = 0  # 初始化總損失
     for i in range(len(teacher_features)):
+        # 將特徵展平，計算每個 batch 的 1 - Cosine 相似度，再取平均
         loss += torch.mean(1 - cos_loss(
             teacher_features[i].view(teacher_features[i].shape[0], -1),
             student_features[i].view(student_features[i].shape[0], -1)))
-    return loss
+    return loss  # 回傳總蒸餾損失
 
 
 def generate_anomaly_map(student_rec,
@@ -63,149 +66,149 @@ def generate_anomaly_map(student_rec,
         # L2 重建誤差
         recon_error = torch.mean((student_rec - gray_batch)**2,
                                  dim=1,
-                                 keepdim=True)  # [B,1,H,W]
-        anomaly_map = recon_error
+                                 keepdim=True)  # [B,1,H,W]，沿通道維度取平均
+        anomaly_map = recon_error  # 缺陷熱力圖即重建誤差
     elif mode == 'seg':
         # 使用缺陷分割 softmax 的第 1 通道 (假設 0 是正常, 1 是缺陷)
         anomaly_map = student_out_mask_sm[:, 1:, :, :]
     elif mode == 'recon+seg':
+        # 同時考慮重建誤差與分割概率
         recon_error = torch.mean((student_rec - gray_batch)**2,
                                  dim=1,
-                                 keepdim=True)
-        seg_prob = student_out_mask_sm[:, 1:, :, :]
-        anomaly_map = recon_error + seg_prob  # 簡單加權
+                                 keepdim=True)  # 計算重建誤差
+        seg_prob = student_out_mask_sm[:, 1:, :, :]  # 取缺陷概率
+        anomaly_map = recon_error + seg_prob  # 簡單加權相加
         anomaly_map = anomaly_map / anomaly_map.max()  # Normalize to [0,1]
     else:
-        raise ValueError(f"Unknown mode {mode}")
+        raise ValueError(f"Unknown mode {mode}")  # 若 mode 不合法，丟出錯誤
 
-    return anomaly_map
+    return anomaly_map  # 回傳缺陷熱力圖
 
 
 def train(_arch_, _class_, epochs, save_pth_path):
-    # 訓練流程
+    # 訓練流程主函數
     print(f"🔧 類別: {_class_} | Epochs: {epochs}")
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'  # 選擇裝置
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'  # 選擇運算裝置
     print(f"🖥️ 使用裝置: {device}")
 
     # 教師模型 (已載入權重並設為 eval 模式)
-    teacher_model = ReconstructiveSubNetwork(in_channels=3, out_channels=3)
-    teacher_model_seg = DiscriminativeSubNetwork(in_channels=6, out_channels=2)
+    teacher_model = ReconstructiveSubNetwork(in_channels=3,
+                                             out_channels=3)  # 重建子網路
+    teacher_model_seg = DiscriminativeSubNetwork(in_channels=6,
+                                                 out_channels=2)  # 分割子網路
+
     # === Step 2: 載入 checkpoint ===
     teacher_model_ckpt = torch.load(
         "DRAEM_seg_large_ae_large_0.0001_800_bs8_bottle_.pckl",
         map_location=device,
-        weights_only=True)
+        weights_only=True)  # 載入教師重建模型權重
     teacher_model_seg_ckpt = torch.load(
         "DRAEM_seg_large_ae_large_0.0001_800_bs8_bottle__seg.pckl",
         map_location=device,
-        weights_only=True)
-    teacher_model.load_state_dict(teacher_model_ckpt)
+        weights_only=True)  # 載入教師分割模型權重
+
+    teacher_model.load_state_dict(teacher_model_ckpt)  # 將權重加載到模型
     teacher_model_seg.load_state_dict(teacher_model_seg_ckpt)
+
     # 重要：載入權重後再移到設備
     teacher_model = teacher_model.to(device)
     teacher_model_seg = teacher_model_seg.to(device)
-    teacher_model.eval()
+    teacher_model.eval()  # 設為評估模式，不更新權重
     teacher_model_seg.eval()
+
     # 學生模型
-    # 定義一個 dropout_rate，您可以將其作為 args 的一部分，或在這裡硬編碼
-    student_dropout_rate = 0.2  # 建議從 0.1-0.3 之間開始嘗試
+    student_dropout_rate = 0.2  # Dropout 率，可調整
     student_model = StudentReconstructiveSubNetwork(
         in_channels=3, out_channels=3,
-        dropout_rate=student_dropout_rate)  # 傳入 dropout_rate
+        dropout_rate=student_dropout_rate)  # 學生重建模型
     student_model_seg = StudentDiscriminativeSubNetwork(
         in_channels=6, out_channels=2,
-        dropout_rate=student_dropout_rate)  # 傳入 dropout_rate
+        dropout_rate=student_dropout_rate)  # 學生分割模型
 
-    student_model = student_model.to(device)
+    student_model = student_model.to(device)  # 移到運算裝置
     student_model_seg = student_model_seg.to(device)
 
-    # === Step 3: 為學生模型定義優化器和學習率排程器 ===
-    # 定義一個 weight_decay 值，您可以將其作為 args 的一部分，或在這裡硬編碼
-    optimizer_weight_decay = 1e-5  # 建議從 1e-5 或 1e-4 開始嘗試
+    # === Step 3: 定義學生模型優化器和學習率排程器 ===
+    optimizer_weight_decay = 1e-5  # L2 正則化
     optimizer = torch.optim.Adam([
         {
             "params": student_model.parameters(),
             "lr": args.lr,
-            "weight_decay": optimizer_weight_decay  # 添加 L2 正則化 (weight_decay)
+            "weight_decay": optimizer_weight_decay  # L2 正則化
         },
         {
             "params": student_model_seg.parameters(),
             "lr": args.lr,
-            "weight_decay": optimizer_weight_decay  # 添加 L2 正則化 (weight_decay)
+            "weight_decay": optimizer_weight_decay  # L2 正則化
         }
     ])
     scheduler = optim.lr_scheduler.MultiStepLR(
         optimizer,
-        milestones=[args.epochs * 0.8, args.epochs * 0.9],
-        gamma=0.2)
+        milestones=[args.epochs * 0.8, args.epochs * 0.9],  # 學習率下降節點
+        gamma=0.2)  # 每次下降乘以 0.2
 
-    # optimizer = torch.optim.Adam(list(student_model.parameters()) +
-    #                              list(student_model_seg.parameters()),
-    #                              lr=learning_rate,
-    #                              betas=(0.5, 0.999))
+    # === Step 4: 定義損失函數和蒸餾超參數 ===
+    loss_l2 = torch.nn.modules.loss.MSELoss()  # L2 損失
+    loss_ssim = SSIM()  # 結構相似性損失
+    loss_focal = FocalLoss()  # Focal Loss，用於分割
 
-    # === Step 4: 定義所有需要的損失函數和蒸餾超參數 ===
-    # 硬損失 (Hard Loss) - 學生與真實標籤比較
-    loss_l2 = torch.nn.modules.loss.MSELoss()
-    loss_ssim = SSIM()
-    loss_focal = FocalLoss()
-
-    # 蒸餾損失 (Distillation Loss) - 學生與教師比較
-    loss_distill_recon_fn = torch.nn.modules.loss.MSELoss()
-    # 重建部分，學生模仿老師的輸出，MSE 或 L1 都可以
-    loss_kldiv = torch.nn.KLDivLoss(
-        reduction='batchmean')  # 分割部分，用 KL 散度衡量機率分佈
+    # 蒸餾損失
+    loss_distill_recon_fn = torch.nn.modules.loss.MSELoss()  # 重建蒸餾損失
+    loss_kldiv = torch.nn.KLDivLoss(reduction='batchmean')  # KL 散度，用於分割蒸餾
 
     # 蒸餾超參數
-    T = 2.0  # 溫度 (Temperature)，讓教師的輸出更平滑，通常 > 1
-    alpha = 0.5  # 蒸餾權重，控制蒸餾損失在總損失中的佔比 (0.7 代表 70%)
+    T = 2.0  # 溫度
+    alpha = 0.5  # 蒸餾權重
 
     # === Step 5: 準備 Dataset 和 DataLoader ===
     print("Step 5: Preparing Dataset and DataLoader...")
 
     train_path = f'./mvtec/{_class_}/train'  # 訓練資料路徑
-    anomaly_source_path = f'./dtd/images'
+    anomaly_source_path = f'./dtd/images'  # 缺陷樣本來源
     dataset = MVTecDRAEMTrainDataset(train_path + "/good/",
                                      anomaly_source_path,
-                                     resize_shape=[256, 256])
+                                     resize_shape=[256, 256])  # 訓練集
     dataloader = DataLoader(dataset,
                             batch_size=args.bs,
                             shuffle=True,
-                            num_workers=8)
-    # --- 添加驗證資料載入器 ---
-    val_path = f'./mvtec/{_class_}/test'  # 驗證資料路徑 (MVTec AD 的測試集)
+                            num_workers=8)  # DataLoader
+
+    # 驗證集
+    val_path = f'./mvtec/{_class_}/test'  # 驗證資料路徑
     val_dataset = MVTecDRAEMValidationDataset(val_path,
                                               resize_shape=[256, 256])
     val_dataloader = DataLoader(
         val_dataset,
-        batch_size=args.bs,  # 驗證集可以與訓練集使用相同 batch_size
-        shuffle=False,  # 驗證集通常不需要打亂
-        num_workers=8)  # 保持與訓練集相同的 num_workers 或根據需求調整
+        batch_size=args.bs,
+        shuffle=False,  # 驗證集不打亂
+        num_workers=8)
     print("Validation DataLoader prepared.")
-    visualizer_path = f'{_class_}/'
-    visualizer = TensorboardVisualizer(
-        log_dir=os.path.join(save_pth_path, visualizer_path))
 
-    # === Step 6: 實現核心訓練迴圈 ===
+    visualizer_path = f'{_class_}/'
+    visualizer = TensorboardVisualizer(log_dir=os.path.join(
+        save_pth_path, visualizer_path))  # TensorBoard 可視化
+
+    # === Step 6: 核心訓練迴圈 ===
     print("Step 6: Starting the training loop...")
-    best_val_loss = float('inf')
-    n_iter = 0
+    best_val_loss = float('inf')  # 初始化最佳驗證損失
+    n_iter = 0  # 總迭代計數器
+
     for epoch in range(args.epochs):
-        student_model.train()  # 確保學生模型處於訓練模式，Dropout 啟用
+        student_model.train()  # 訓練模式
         student_model_seg.train()
 
-        running_loss = 0.0
+        running_loss = 0.0  # 累計損失
 
         print(f"Epoch: {epoch+1}/{args.epochs}")
         for i_batch, sample_batched in enumerate(dataloader):
-            # 準備資料
+            # 取得 batch 資料
             gray_batch = sample_batched["image"].to(device)
             aug_gray_batch = sample_batched["augmented_image"].to(device)
             anomaly_mask = sample_batched["anomaly_mask"].to(device)
 
-            # --- 教師模型前向傳播 (不計算梯度) ---
-            with torch.no_grad():
+            # --- 教師模型前向傳播 ---
+            with torch.no_grad():  # 教師模型不更新權重
                 teacher_rec = teacher_model(aug_gray_batch)
                 teacher_joined_in = torch.cat((teacher_rec, aug_gray_batch),
                                               dim=1)
@@ -217,32 +220,32 @@ def train(_arch_, _class_, epochs, save_pth_path):
             student_out_mask_logits = student_model_seg(student_joined_in)
 
             # --- 計算損失 ---
-            # 1. 硬損失 (學生 vs. Ground Truth)
-            loss_hard_l2 = loss_l2(student_rec, gray_batch)
-            loss_hard_ssim = loss_ssim(student_rec, gray_batch)
+            # 1. 硬損失
+            loss_hard_l2 = loss_l2(student_rec, gray_batch)  # L2 損失
+            loss_hard_ssim = loss_ssim(student_rec, gray_batch)  # SSIM 損失
             student_out_mask_sm = F.softmax(student_out_mask_logits, dim=1)
-            loss_hard_segment = loss_focal(student_out_mask_sm, anomaly_mask)
-            loss_hard = loss_hard_l2 + loss_hard_ssim + loss_hard_segment
+            loss_hard_segment = loss_focal(student_out_mask_sm,
+                                           anomaly_mask)  # 分割損失
+            loss_hard = loss_hard_l2 + loss_hard_ssim + loss_hard_segment  # 總硬損失
 
-            # 2. 蒸餾損失 (學生 vs. 教師)
-            #   a. 重建蒸餾損失
+            # 2. 蒸餾損失
             loss_distill_recon = loss_distill_recon_fn(student_rec,
-                                                       teacher_rec)
-            #   b. 分割蒸餾損失 (KL 散度)
+                                                       teacher_rec)  # 重建蒸餾
             p_student = F.log_softmax(student_out_mask_logits / T, dim=1)
             p_teacher = F.softmax(teacher_out_mask_logits / T, dim=1)
             loss_distill_segment = loss_kldiv(p_student, p_teacher) * (
-                T * T)  # 乘上 T^2 以保持梯度大小
-            loss_distill = loss_distill_recon + loss_distill_segment
+                T * T)  # 分割蒸餾
+            loss_distill = loss_distill_recon + loss_distill_segment  # 總蒸餾損失
 
-            # 3. 總損失 (加權組合)
-            loss = (1 - alpha) * loss_hard + alpha * loss_distill
+            # 3. 總損失
+            loss = (1 - alpha) * loss_hard + alpha * loss_distill  # 加權組合
 
-            # --- 反向傳播與優化 (只更新學生模型) ---
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            # === 可視化 ===
+            # --- 反向傳播與優化 ---
+            optimizer.zero_grad()  # 清空梯度
+            loss.backward()  # 反向傳播
+            optimizer.step()  # 更新權重
+
+            # --- 可視化 ---
             if i_batch % 100 == 0:
                 visualizer.plot_loss(loss_hard_l2.item(),
                                      n_iter,
@@ -253,8 +256,8 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 visualizer.plot_loss(loss_hard_segment.item(),
                                      n_iter,
                                      loss_name='segment_loss')
-            if i_batch == 0:
-                # --- 生成熱力圖 ---
+
+            if i_batch == 0:  # batch 首筆，生成熱力圖
                 anomaly_map = generate_anomaly_map(student_rec,
                                                    gray_batch,
                                                    student_out_mask_sm,
@@ -278,48 +281,47 @@ def train(_arch_, _class_, epochs, save_pth_path):
                                                  n_iter,
                                                  image_name='mask_out')
 
-            # === 累計當前 batch 的損失 ===
-            running_loss += loss.item()
-            n_iter += 1  # 更新迭代計數器
+            running_loss += loss.item()  # 累計 batch 損失
+            n_iter += 1  # 更新總迭代次數
+
             if i_batch % 100 == 0:
                 print(
                     f"  Batch {i_batch}/{len(dataloader)}, Total Loss: {loss.item():.4f}, "
                     f"Hard Loss: {loss_hard.item():.4f}, Distill Loss: {loss_distill.item():.4f}"
                 )
 
-        # 計算此 epoch 的平均損失
+        # 計算 epoch 平均損失
         epoch_loss = running_loss / len(dataloader)
         print(f"Epoch {epoch+1} Average Loss: {epoch_loss:.4f}")
 
         # === 驗證階段 ===
-        student_model.eval()  # 設置學生模型為評估模式，Dropout 禁用
+        student_model.eval()  # 設為評估模式
         student_model_seg.eval()
         val_running_loss = 0.0
 
-        with torch.no_grad():  # 驗證階段不需要計算梯度
-            for i_batch_val, sample_batched_val in enumerate(
-                    val_dataloader):  # 假設有一個 val_dataloader
+        with torch.no_grad():  # 驗證不更新權重
+            for i_batch_val, sample_batched_val in enumerate(val_dataloader):
                 gray_batch_val = sample_batched_val["image"].to(device)
                 aug_gray_batch_val = sample_batched_val["augmented_image"].to(
                     device)
                 anomaly_mask_val = sample_batched_val["anomaly_mask"].to(
                     device)
 
-                # --- 教師模型前向傳播 (不計算梯度) ---
+                # 教師前向傳播
                 teacher_rec_val = teacher_model(aug_gray_batch_val)
                 teacher_joined_in_val = torch.cat(
                     (teacher_rec_val, aug_gray_batch_val), dim=1)
                 teacher_out_mask_logits_val = teacher_model_seg(
                     teacher_joined_in_val)
 
-                # --- 學生模型前向傳播 ---
+                # 學生前向傳播
                 student_rec_val = student_model(aug_gray_batch_val)
                 student_joined_in_val = torch.cat(
                     (student_rec_val, aug_gray_batch_val), dim=1)
                 student_out_mask_logits_val = student_model_seg(
                     student_joined_in_val)
 
-                # --- 計算驗證損失 ---
+                # 計算驗證損失
                 loss_hard_l2_val = loss_l2(student_rec_val, gray_batch_val)
                 loss_hard_ssim_val = loss_ssim(student_rec_val, gray_batch_val)
                 student_out_mask_sm_val = F.softmax(
@@ -341,7 +343,8 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 val_loss = (1 -
                             alpha) * loss_hard_val + alpha * loss_distill_val
                 val_running_loss += val_loss.item()
-                if i_batch_val == 0:
+
+                if i_batch_val == 0:  # 驗證集首 batch，生成熱力圖
                     anomaly_map_val = generate_anomaly_map(
                         student_rec_val,
                         gray_batch_val,
@@ -353,7 +356,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
         epoch_val_loss = val_running_loss / len(val_dataloader)
         print(f"Epoch {epoch+1} Average Validation Loss: {epoch_val_loss:.4f}")
 
-        # 檢查是否為最佳損失，若是則儲存權重
+        # 檢查是否最佳模型，若是就保存
         if epoch_loss < best_val_loss:
             best_val_loss = epoch_loss
             student_run_name = f"{_arch_}_student_{_class_}"
@@ -362,11 +365,10 @@ def train(_arch_, _class_, epochs, save_pth_path):
             torch.save(
                 student_model_seg.state_dict(),
                 os.path.join(save_pth_path, student_run_name + "_seg.pckl"))
-
             print(f"🎉 找到新的最佳模型！Loss: {best_val_loss:.4f}。已儲存至 {save_pth_path}")
 
-        scheduler.step()
-    print("訓練完成！")
+        scheduler.step()  # 更新學習率
+    print("訓練完成！")  # 訓練結束
 
 
 def generate_anomaly_heatmap(image_path,
