@@ -232,25 +232,24 @@ def train(_arch_, _class_, epochs, save_pth_path):
             # --- 可視化 ---
             if i_batch == 0:  # 只顯示第一個 batch，避免顯示太多
                 batch_idx = 0  # 顯示 batch 中第一張圖
-                fig, axs = plt.subplots(2, 3, figsize=(12, 8))
+                fig, axs = plt.subplots(2, 4, figsize=(16, 8))
 
-                axs[0, 0].imshow(orig_batch[batch_idx].permute(
-                    1, 2, 0).cpu())  # 彩色圖需 permute
+                axs[0, 0].imshow(orig_batch[batch_idx].permute(1, 2, 0).cpu())
                 axs[0, 0].set_title("原始彩色圖")
                 axs[0, 0].axis('off')
 
-                axs[0, 0].imshow(gray_batch[batch_idx, 0].cpu(), cmap='gray')
-                axs[0, 0].set_title("原始灰階圖")
-                axs[0, 0].axis('off')
-
-                axs[0, 1].imshow(aug_gray_batch[batch_idx, 0].cpu(),
-                                 cmap='gray')
-                axs[0, 1].set_title("增強後圖像")
+                axs[0, 1].imshow(gray_batch[batch_idx, 0].cpu(), cmap='gray')
+                axs[0, 1].set_title("原始灰階圖")
                 axs[0, 1].axis('off')
 
-                axs[0, 2].imshow(teacher_rec[batch_idx, 0].cpu(), cmap='gray')
-                axs[0, 2].set_title("教師模型重建")
+                axs[0, 2].imshow(aug_gray_batch[batch_idx, 0].cpu(),
+                                 cmap='gray')
+                axs[0, 2].set_title("增強後圖像")
                 axs[0, 2].axis('off')
+
+                axs[0, 3].imshow(teacher_rec[batch_idx, 0].cpu(), cmap='gray')
+                axs[0, 3].set_title("教師模型重建")
+                axs[0, 3].axis('off')
 
                 axs[1, 0].imshow(student_rec[batch_idx, 0].cpu(), cmap='gray')
                 axs[1, 0].set_title("學生模型重建")
@@ -271,12 +270,12 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 axs[1, 3].imshow(anomaly_mask[batch_idx, 0].cpu(),
                                  cmap='jet',
                                  alpha=0.5)
-
                 axs[1, 3].set_title("原始異常遮罩")
                 axs[1, 3].axis('off')
 
                 plt.tight_layout()
                 plt.show()
+                plt.savefig("debug.png")
             # --- 計算損失 ---
             # 1. 硬損失
             loss_hard_l2 = loss_l2(student_rec, gray_batch)  # L2 損失
