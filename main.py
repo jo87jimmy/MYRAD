@@ -203,7 +203,7 @@ def train(_arch_, _class_, epochs, save_pth_path):
         print(f"Epoch: {epoch+1}/{args.epochs}")
         for i_batch, sample_batched in enumerate(dataloader):
             # 取得 batch 資料，每個 batch 包含原始灰階圖像、增強後圖像，以及異常遮罩
-            orig_batch = sample_batched["orig_image"].to(device)  # 原始彩色圖
+            # orig_batch = sample_batched["orig_image"].to(device)  # 原始彩色圖
             gray_batch = sample_batched["image"].to(
                 device)  # 原始灰階圖，送到 GPU 或 CPU
             aug_gray_batch = sample_batched["augmented_image"].to(
@@ -233,10 +233,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
             if i_batch == 0:  # 只顯示第一個 batch，避免顯示太多
                 batch_idx = 0  # 顯示 batch 中第一張圖
                 fig, axs = plt.subplots(2, 4, figsize=(16, 8))
-
-                axs[0, 0].imshow(orig_batch[batch_idx].permute(1, 2, 0).cpu())
-                axs[0, 0].set_title("原始彩色圖")
-                axs[0, 0].axis('off')
 
                 axs[0, 1].imshow(gray_batch[batch_idx, 0].cpu(), cmap='gray')
                 axs[0, 1].set_title("原始灰階圖")
@@ -499,15 +495,7 @@ if __name__ == '__main__':
     parser.add_argument('--arch', default='wres50', type=str)  # 模型架構
     parser.add_argument('--bs', action='store', type=int, required=True)
     parser.add_argument('--lr', action='store', type=float, required=True)
-    # parser.add_argument('--test_image_path',
-    #                     type=str,
-    #                     help='路徑到一個用於生成熱力圖的測試影像 (訓練後執行)。',
-    #                     default=None)  # 新增參數
-    # parser.add_argument(
-    #     '--student_dropout_rate',
-    #     type=float,
-    #     default=0.2,
-    #     help='學生模型訓練和載入時使用的 Dropout Rate。')  # 將 Dropout Rate 可配置化
+
     args = parser.parse_args()
 
     setup_seed(111)  # 固定隨機種子
@@ -519,75 +507,3 @@ if __name__ == '__main__':
 
     # 開始訓練，並接收最佳模型路徑與結果
     train(args.arch, args.category, args.epochs, save_pth_path)
-
-    # # --- 缺陷檢測熱力圖生成區塊 ---
-    # test_path = f'./mvtec/{args.category}/test'  # 驗證資料路徑 (MVTec AD 的測試集)
-    # if test_path:
-    #     print("\n--- 正在生成缺陷檢測熱力圖 ---")
-    #     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-    #     # 載入學生模型權重
-    #     # 這裡使用的 dropout_rate 應與訓練時使用的保持一致
-    #     student_model = StudentReconstructiveSubNetwork(
-    #         in_channels=3,
-    #         out_channels=3,
-    #         dropout_rate=args.student_dropout_rate).to(device)
-    #     student_model_seg = StudentDiscriminativeSubNetwork(
-    #         in_channels=6,
-    #         out_channels=2,
-    #         dropout_rate=args.student_dropout_rate).to(device)
-
-    #     student_run_name = f"{args.arch}_student_{args.category}"
-    #     student_model_path = os.path.join(save_pth_path,
-    #                                       student_run_name + ".pckl")
-    #     student_model_seg_path = os.path.join(save_pth_path,
-    #                                           student_run_name + "_seg.pckl")
-
-    #     if os.path.exists(student_model_path) and os.path.exists(
-    #             student_model_seg_path):
-    #         student_model.load_state_dict(
-    #             torch.load(student_model_path, map_location=device))
-    #         student_model_seg.load_state_dict(
-    #             torch.load(student_model_seg_path, map_location=device))
-    #         print(
-    #             f"✅ 已成功載入學生模型權重: {student_model_path} 及 {student_model_seg_path}"
-    #         )
-
-    #         # 生成熱力圖
-    #         anomaly_heatmap, original_image_resized = generate_anomaly_heatmap(
-    #             test_path + args.test_image_path, student_model,
-    #             student_model_seg, device)
-
-    #         # 可視化結果
-    #         plt.figure(figsize=(12, 6))
-
-    #         plt.subplot(1, 2, 1)
-    #         plt.imshow(original_image_resized)
-    #         plt.title("原始影像 (Resized)")
-    #         plt.axis('off')
-
-    #         plt.subplot(1, 2, 2)
-    #         # 將熱力圖疊加在原始影像上
-    #         plt.imshow(original_image_resized, cmap='gray')  # 背景顯示原始影像
-    #         plt.imshow(anomaly_heatmap, cmap='jet', alpha=0.5, vmin=0,
-    #                    vmax=1)  # 疊加熱力圖
-    #         plt.colorbar(label='異常機率')
-    #         plt.title("缺陷熱力圖")
-    #         plt.axis('off')
-
-    #         plt.tight_layout()
-    #         plt.show()
-
-    #         # (可選) 儲存熱力圖到檔案
-    #         heatmap_filename = os.path.join(
-    #             save_pth_path,
-    #             f"heatmap_{os.path.basename(args.test_image_path)}")
-    #         plt.savefig(heatmap_filename)
-    #         print(f"熱力圖已儲存至: {heatmap_filename}")
-
-    #     else:
-    #         print(
-    #             f"❌ 找不到學生模型權重，請確認路徑: {student_model_path} 或 {student_model_seg_path} 是否存在。"
-    #         )
-    # else:
-    #     print("\n如需生成熱力圖，請在命令列中指定 '--test_image_path <影像路徑>'。")
