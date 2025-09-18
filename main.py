@@ -203,7 +203,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
         print(f"Epoch: {epoch+1}/{args.epochs}")
         for i_batch, sample_batched in enumerate(dataloader):
             # 取得 batch 資料，每個 batch 包含原始灰階圖像、增強後圖像，以及異常遮罩
-            orig_batch = sample_batched["orig_image"].to(device)  # 原始彩色圖
             gray_batch = sample_batched["image"].to(
                 device)  # 原始灰階圖，送到 GPU 或 CPU
             aug_gray_batch = sample_batched["augmented_image"].to(
@@ -233,7 +232,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
             if i_batch == 0:  # 只顯示第一個 batch，避免顯示太多
                 batch_idx = 0  # 顯示 batch 中第一張圖
                 # 將各張圖轉成 numpy 格式，C,H,W -> H,W,C
-                orig_img = orig_batch[batch_idx].permute(1, 2, 0).cpu().numpy()
                 gray_img = gray_batch[batch_idx, 0].cpu().numpy()
                 aug_gray_img = aug_gray_batch[batch_idx, 0].cpu().numpy()
                 teacher_rec_img = teacher_rec[batch_idx, 0].cpu().numpy()
@@ -243,7 +241,6 @@ def train(_arch_, _class_, epochs, save_pth_path):
                 anomaly_mask_img = anomaly_mask[batch_idx, 0].cpu().numpy()
 
                 # 用 visualizer 儲存
-                visualizer.add_image("原始彩色圖", orig_img, epoch)
                 visualizer.add_image("原始灰階圖", gray_img, epoch, cmap='gray')
                 visualizer.add_image("增強後圖像", aug_gray_img, epoch, cmap='gray')
                 visualizer.add_image("教師模型重建",
